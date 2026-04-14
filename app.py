@@ -399,6 +399,49 @@ def _format_approval_summary(arch: dict, eval_data: dict) -> str:
     return "\n".join(lines)
 
 
+# ─── Gap detection display helper ────────────────────────────────────────────
+
+def _format_gaps(gaps: list[dict], completeness: int) -> str:
+    if not gaps:
+        return "✅ Requirements are complete — no gaps detected."
+
+    impact_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "🟢"}
+    bar = "█" * (completeness // 10) + "░" * (10 - completeness // 10)
+
+    lines = [
+        "## ⚠️ Requirements Gap Analysis",
+        "",
+        f"**Completeness Score: {completeness}/100** `{bar}`",
+        "",
+        "The following information was not provided. The architect will use the stated assumptions — "
+        "you can proceed or clarify before design begins.",
+        "",
+        "| Impact | Category | What's Missing | Assumption Being Made |",
+        "|--------|----------|---------------|----------------------|",
+    ]
+    for g in sorted(gaps, key=lambda x: {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(x.get("impact", "LOW"), 3)):
+        icon    = impact_icon.get(g.get("impact", "LOW"), "🟢")
+        cat     = g.get("category", "—")
+        gap_txt = g.get("gap", "—")
+        assume  = g.get("assumption", "—")
+        reason  = g.get("impact_reason", "")
+        lines.append(f"| {icon} **{g.get('impact','LOW')}** | {cat} | {gap_txt} | _{assume}_ |")
+        if reason and g.get("impact") == "HIGH":
+            lines.append(f"| | | ⚠️ _Risk: {reason}_ | |")
+
+    high_count   = sum(1 for g in gaps if g.get("impact") == "HIGH")
+    medium_count = sum(1 for g in gaps if g.get("impact") == "MEDIUM")
+    low_count    = sum(1 for g in gaps if g.get("impact") == "LOW")
+
+    lines += [
+        "",
+        f"**{len(gaps)} gaps detected:** {high_count} 🔴 High  ·  {medium_count} 🟡 Medium  ·  {low_count} 🟢 Low",
+        "",
+        "_High-impact gaps may significantly change the architecture if clarified._",
+    ]
+    return "\n".join(lines)
+
+
 # ─── Chainlit event handlers ─────────────────────────────────────────────────
 
 @cl.on_chat_start
@@ -414,179 +457,65 @@ Welcome! I'm your AI-powered Azure Solution Architect — a **multi-agent pipeli
 
 | Stage | Agent | What it does |
 |-------|-------|-------------|
-| 1 | 📋 Planner | Extracts structured requirements |
-| 2 | 🏗️ Architect | Designs complete Azure topology |
-| 3 | ⚖️ Evaluator | Reviews against Well-Architected Framework |
+| 1 | 📋 Planner | Extracts requirements + detects gaps |
+| 1b | 👤 You | Review gaps & confirm or clarify |
+| 2 | 🏗️ Architect | Designs complete Azure topology (2 variants) |
+| 3 | ⚖️ Evaluator | WAF review + confidence scoring |
 | 4 | 🔄 Redesigner | Auto-fixes issues (up to 3 loops) |
-| 5 | 👤 You | Review & approve the final design |
+| 5 | 👤 You | Review & approve final design |
 | 6 | 📄 ARM Generator | Produces a deployable ARM template |
 
 ---
 
-**Please describe your Azure workload.** For best results include:
-- What the system does (web app, data pipeline, microservices, etc.)
-- Expected scale (concurrent users, data volume, request rate)
-- Availability target (e.g. 99.9%, 99.99%)
-- Target Azure regions
-- Budget range (optional)
-- Compliance requirements (HIPAA, PCI-DSS, SOC2, etc.)
+**Please describe your Azure workload.** Even a rough description works — the Planner will detect what's missing and ask you to clarify before designing.
 
-_Example: "A multi-tenant SaaS web application for 50,000 daily active users processing financial transactions, requiring 99.99% availability across East US and West Europe, HIPAA compliant, budget ~$15,000/month."_"""
+_Example: "E-commerce site, 50K daily users, payment processing, HIPAA, East US, $10K/month budget"_"""
     ).send()
 
 
 @cl.on_message
 async def on_message(message: cl.Message):
     thread_id = str(uuid.uuid4())
-    config = {"configurable": {"thread_id": thread_id}}
+    config    = {"configurable": {"thread_id": thread_id}}
 
     initial_state = {
-        "user_input": message.content,
-        "plan": {},
-        "architecture": {},
-        "evaluation": {},
-        "loop_count": 0,
-        "max_loops": 3,
-        "human_approved": None,
-        "arm_template": {},
-        "current_stage": "planner",
-        "errors": [],
+        "user_input":         message.content,
+        "plan":               {},
+        "requirements_gaps":  [],
+        "gap_confirmed":      None,
+        "architecture":       {},
+        "evaluation":         {},
+        "loop_count":         0,
+        "max_loops":          3,
+        "human_approved":     None,
+        "arm_template":       {},
+        "current_stage":      "planner",
+        "errors":             [],
     }
 
     await cl.Message(
-        content="🚀 **Launching Azure Architecture Pipeline...**\n\n"
-                f"_Thread ID: `{thread_id}`_"
+        content=f"🚀 **Launching Azure Architecture Pipeline...**\n\n_Thread: `{thread_id}`_"
     ).send()
 
-    arm_template = {}
-    approved = False
-    interrupted = False
+    arm_template  = {}
+    approved      = False
+    current_loop  = 0
+    stream_input  = initial_state   # first call uses state dict; resumes use Command
 
     try:
-        # ── Phase 1: Run pipeline until interrupt ─────────────────────────
-        current_loop = 0
+        # ── Main streaming loop — handles multiple interrupt types ─────────
+        while True:
+            interrupted      = False
+            interrupt_type   = None
+            interrupt_payload = {}
 
-        async for event in pipeline.astream(
-            initial_state, config, stream_mode="updates"
-        ):
-            # Detect interrupt (human_approval node paused)
-            if "__interrupt__" in event:
-                interrupted = True
-                break
-
-            for node_name, updates in event.items():
-                if node_name.startswith("__"):
-                    continue
-
-                display_name = NODE_DISPLAY.get(node_name, node_name.title())
-
-                # ── Planner ──────────────────────────────────────────────
-                if node_name == "planner":
-                    async with cl.Step(name=display_name, type="tool") as step:
-                        step.output = _format_plan(updates.get("plan", {}))
-
-                # ── Architect ────────────────────────────────────────────
-                elif node_name == "architect":
-                    async with cl.Step(name=display_name, type="tool") as step:
-                        step.output = _format_architecture(updates.get("architecture", {}))
-
-                # ── Evaluator ────────────────────────────────────────────
-                elif node_name == "evaluator":
-                    eval_data = updates.get("evaluation", {})
-                    async with cl.Step(name=display_name, type="tool") as step:
-                        step.output = _format_evaluation(eval_data)
-
-                    # Announce redesign loop if architecture failed
-                    if not eval_data.get("passed", False):
-                        issues = eval_data.get("critical_issues", [])
-                        if current_loop < initial_state["max_loops"]:
-                            await cl.Message(
-                                content=(
-                                    f"🔁 **Redesign Loop {current_loop + 1}/{initial_state['max_loops']}** "
-                                    f"— fixing {len(issues)} critical issue(s)"
-                                )
-                            ).send()
-
-                # ── Redesigner ───────────────────────────────────────────
-                elif node_name == "redesigner":
-                    current_loop = updates.get("loop_count", current_loop + 1)
-                    arch = updates.get("architecture", {})
-                    async with cl.Step(name=display_name, type="tool") as step:
-                        output_lines = [_format_architecture(arch)]
-                        notes = arch.get("redesign_notes", [])
-                        if notes:
-                            output_lines.append("\n**Changes Made:**")
-                            for note in notes[:5]:
-                                output_lines.append(f"- {note}")
-                        step.output = "\n".join(output_lines)
-
-                # ── ARM Generator (pre-approval branch — unlikely but safe) ──
-                elif node_name == "arm_generator":
-                    arm_template = updates.get("arm_template", {})
-                    async with cl.Step(name=display_name, type="tool") as step:
-                        resource_count = len(arm_template.get("resources", []))
-                        step.output = f"ARM template generated with **{resource_count}** resource definitions."
-
-                # Surface any agent-level errors
-                errors = updates.get("errors", [])
-                if errors:
-                    latest = errors[-1]
-                    await cl.Message(content=f"⚠️ _{latest}_").send()
-
-        # ── Phase 2: Human approval ───────────────────────────────────────
-        if interrupted:
-            graph_state = pipeline.get_state(config)
-            arch = graph_state.values.get("architecture", {})
-            eval_data = graph_state.values.get("evaluation", {})
-
-            summary = _format_approval_summary(arch, eval_data)
-
-            res = await cl.AskActionMessage(
-                content=(
-                    "## 👤 Architecture Review Required\n\n"
-                    f"{summary}\n\n"
-                    "---\n"
-                    "_Review the architecture above, then approve to generate an ARM template or reject to end the pipeline._"
-                ),
-                actions=[
-                    cl.Action(
-                        name="approve",
-                        label="✅ Approve → Generate ARM Template",
-                        payload={"value": "approve"},
-                    ),
-                    cl.Action(
-                        name="reject",
-                        label="❌ Reject Pipeline",
-                        payload={"value": "reject"},
-                    ),
-                ],
-            ).send()
-
-            if res:
-                # Chainlit 2.x: action result carries name + payload
-                action_name = res.get("name", "")
-                action_payload = res.get("payload", {})
-                approved = (
-                    action_name == "approve"
-                    or action_payload.get("value") == "approve"
-                )
-            else:
-                approved = False
-
-            if approved:
-                await cl.Message(
-                    content="✅ **Approved!** Generating deployable ARM template..."
-                ).send()
-            else:
-                await cl.Message(
-                    content="❌ **Pipeline rejected.** Architecture was not approved by user."
-                ).send()
-
-            # ── Phase 3: Resume pipeline after interrupt ──────────────────
-            async for event in pipeline.astream(
-                Command(resume=approved), config, stream_mode="updates"
-            ):
+            async for event in pipeline.astream(stream_input, config, stream_mode="updates"):
                 if "__interrupt__" in event:
+                    interrupted      = True
+                    raw_interrupts   = event["__interrupt__"]
+                    if raw_interrupts:
+                        interrupt_payload = raw_interrupts[0].value if hasattr(raw_interrupts[0], "value") else {}
+                        interrupt_type    = interrupt_payload.get("type", "human_approval")
                     break
 
                 for node_name, updates in event.items():
@@ -594,61 +523,184 @@ async def on_message(message: cl.Message):
                         continue
 
                     display_name = NODE_DISPLAY.get(node_name, node_name.title())
+                    errors       = updates.get("errors", [])
 
-                    if node_name == "arm_generator":
+                    # ── Planner ──────────────────────────────────────────
+                    if node_name == "planner":
+                        async with cl.Step(name=display_name, type="tool") as step:
+                            step.output = _format_plan(updates.get("plan", {}))
+
+                    # ── Architect ────────────────────────────────────────
+                    elif node_name == "architect":
+                        async with cl.Step(name=display_name, type="tool") as step:
+                            step.output = _format_architecture(updates.get("architecture", {}))
+
+                    # ── Evaluator ────────────────────────────────────────
+                    elif node_name == "evaluator":
+                        eval_data = updates.get("evaluation", {})
+                        async with cl.Step(name=display_name, type="tool") as step:
+                            step.output = _format_evaluation(eval_data)
+                        if not eval_data.get("passed", False):
+                            issues = eval_data.get("critical_issues", [])
+                            if current_loop < initial_state["max_loops"]:
+                                await cl.Message(
+                                    content=(
+                                        f"🔁 **Redesign Loop {current_loop + 1}/{initial_state['max_loops']}**"
+                                        f" — fixing {len(issues)} critical issue(s)"
+                                    )
+                                ).send()
+
+                    # ── Redesigner ───────────────────────────────────────
+                    elif node_name == "redesigner":
+                        current_loop = updates.get("loop_count", current_loop + 1)
+                        arch = updates.get("architecture", {})
+                        async with cl.Step(name=display_name, type="tool") as step:
+                            lines = [_format_architecture(arch)]
+                            notes = arch.get("redesign_notes", [])
+                            if notes:
+                                lines += ["\n**Changes Made:**"] + [f"- {n}" for n in notes[:5]]
+                            step.output = "\n".join(lines)
+
+                    # ── ARM Generator ────────────────────────────────────
+                    elif node_name == "arm_generator":
                         arm_template = updates.get("arm_template", {})
                         async with cl.Step(name=display_name, type="tool") as step:
-                            resource_count = len(arm_template.get("resources", []))
                             step.output = (
-                                f"ARM template generated with **{resource_count}** resource definitions."
+                                f"ARM template generated with "
+                                f"**{len(arm_template.get('resources', []))}** resource definitions."
                             )
 
-                    errors = updates.get("errors", [])
                     if errors:
-                        latest = errors[-1]
-                        await cl.Message(content=f"⚠️ _{latest}_").send()
+                        await cl.Message(content=f"⚠️ _{errors[-1]}_").send()
 
-        # ── Phase 4: Display ARM template ─────────────────────────────────
+            # ── No interrupt — pipeline finished ─────────────────────────
+            if not interrupted:
+                break
+
+            # ── Handle: Gap Review interrupt ──────────────────────────────
+            if interrupt_type == "gap_review":
+                graph_state   = pipeline.get_state(config)
+                gaps          = graph_state.values.get("requirements_gaps", [])
+                completeness  = graph_state.values.get("plan", {}).get("completeness_score", 100)
+
+                gaps_content = _format_gaps(gaps, completeness)
+
+                res = await cl.AskActionMessage(
+                    content=gaps_content + "\n\n---\n_How would you like to proceed?_",
+                    actions=[
+                        cl.Action(
+                            name="proceed",
+                            label="✅ Proceed with These Assumptions",
+                            payload={"action": "proceed"},
+                        ),
+                        cl.Action(
+                            name="clarify",
+                            label="📝 Let Me Clarify First",
+                            payload={"action": "clarify"},
+                        ),
+                    ],
+                ).send()
+
+                action = "proceed"
+                if res:
+                    action = res.get("name") or res.get("payload", {}).get("action", "proceed")
+
+                if action == "clarify":
+                    clarification_msg = await cl.AskUserMessage(
+                        content=(
+                            "Please provide the missing details. You can address any or all gaps above.\n\n"
+                            "_Examples: 'Budget is $8K/month, PCI-DSS required, peak traffic is 5K concurrent users'_"
+                        ),
+                        timeout=600,
+                    ).send()
+                    clarification_text = clarification_msg.get("output", "").strip() if clarification_msg else ""
+
+                    if clarification_text:
+                        await cl.Message(
+                            content=f"📝 **Clarification received.** Re-analyzing requirements..."
+                        ).send()
+                        stream_input = Command(resume=clarification_text)
+                    else:
+                        await cl.Message(content="No clarification provided — proceeding with assumptions.").send()
+                        stream_input = Command(resume=True)
+                else:
+                    await cl.Message(content="✅ **Proceeding with stated assumptions.** Designing architecture...").send()
+                    stream_input = Command(resume=True)
+
+            # ── Handle: Human Approval interrupt ──────────────────────────
+            elif interrupt_type == "human_approval":
+                graph_state = pipeline.get_state(config)
+                arch        = graph_state.values.get("architecture", {})
+                eval_data   = graph_state.values.get("evaluation", {})
+                summary     = _format_approval_summary(arch, eval_data)
+
+                res = await cl.AskActionMessage(
+                    content=(
+                        "## 👤 Architecture Review Required\n\n"
+                        f"{summary}\n\n---\n"
+                        "_Approve to generate a deployable ARM template, or reject to end._"
+                    ),
+                    actions=[
+                        cl.Action(
+                            name="approve",
+                            label="✅ Approve → Generate ARM Template",
+                            payload={"value": "approve"},
+                        ),
+                        cl.Action(
+                            name="reject",
+                            label="❌ Reject Pipeline",
+                            payload={"value": "reject"},
+                        ),
+                    ],
+                ).send()
+
+                if res:
+                    approved = (
+                        res.get("name") == "approve"
+                        or res.get("payload", {}).get("value") == "approve"
+                    )
+                else:
+                    approved = False
+
+                if approved:
+                    await cl.Message(content="✅ **Approved!** Generating deployable ARM template...").send()
+                else:
+                    await cl.Message(content="❌ **Pipeline rejected** by user.").send()
+
+                stream_input = Command(resume=approved)
+
+                if not approved:
+                    break   # no need to continue streaming after rejection
+
+            else:
+                # Unknown interrupt type — resume and continue
+                stream_input = Command(resume=True)
+
+        # ── Display ARM template ──────────────────────────────────────────
         if arm_template and approved:
             arm_json = json.dumps(arm_template, indent=2)
             await cl.Message(
                 content=(
                     "## 📄 Deployable ARM Template\n\n"
-                    "Your production-ready Azure ARM template:\n\n"
                     f"```json\n{arm_json}\n```"
                 )
             ).send()
 
-            resource_count = len(arm_template.get("resources", []))
-            param_count = len(arm_template.get("parameters", {}))
-            output_count = len(arm_template.get("outputs", {}))
-
             await cl.Message(
                 content=(
                     "## ✅ Pipeline Complete!\n\n"
-                    f"**ARM Template Summary:**\n"
-                    f"- Resources: {resource_count}\n"
-                    f"- Parameters: {param_count}\n"
-                    f"- Outputs: {output_count}\n\n"
+                    f"**ARM Template:** {len(arm_template.get('resources', []))} resources  ·  "
+                    f"{len(arm_template.get('parameters', {}))} parameters  ·  "
+                    f"{len(arm_template.get('outputs', {}))} outputs\n\n"
                     "**Deploy with Azure CLI:**\n"
                     "```bash\n"
                     "az deployment group create \\\n"
                     "  --resource-group <your-rg> \\\n"
                     "  --template-file template.json \\\n"
                     "  --parameters environment=prod namingPrefix=myapp\n"
-                    "```\n\n"
-                    "**Deploy with Azure PowerShell:**\n"
-                    "```powershell\n"
-                    "New-AzResourceGroupDeployment `\n"
-                    "  -ResourceGroupName <your-rg> `\n"
-                    "  -TemplateFile template.json `\n"
-                    "  -environment prod -namingPrefix myapp\n"
                     "```"
                 )
             ).send()
-
-        elif not interrupted and not arm_template:
-            await cl.Message(content="✅ **Pipeline completed.**").send()
 
     except Exception as exc:
         msg = str(exc)
@@ -656,17 +708,11 @@ async def on_message(message: cl.Message):
             await cl.Message(
                 content=(
                     "## ❌ Azure OpenAI — Quota / Rate Limit\n\n"
-                    "Your Azure OpenAI deployment has hit a quota or rate limit.\n\n"
-                    "**Fix:** Go to [portal.azure.com](https://portal.azure.com) → "
-                    "Azure OpenAI → your resource → **Deployments** → increase TPM limit."
+                    "**Fix:** portal.azure.com → Azure OpenAI → Deployments → increase TPM limit."
                 )
             ).send()
         else:
             await cl.Message(
-                content=(
-                    f"❌ **Pipeline Error**\n\n"
-                    f"```\n{type(exc).__name__}: {exc}\n```\n\n"
-                    "Please try again with a different workload description."
-                )
+                content=f"❌ **Pipeline Error**\n\n```\n{type(exc).__name__}: {exc}\n```"
             ).send()
         raise

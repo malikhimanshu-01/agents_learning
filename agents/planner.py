@@ -38,15 +38,23 @@ def _extract_json(content: str) -> dict:
 
 def planner_agent(state: ArchitectState) -> dict:
     try:
+        # If the user provided a clarification, append it to the original input
+        user_input = state["user_input"]
         messages = [
             SystemMessage(content=PLANNER_PROMPT),
-            HumanMessage(content=f"User requirement:\n{state['user_input']}"),
+            HumanMessage(content=f"User requirement:\n{user_input}"),
         ]
         response = llm.invoke(messages)
         plan = _extract_json(response.content)
+
+        # Extract gaps from plan (planner now embeds them in the plan JSON)
+        gaps = plan.pop("requirements_gaps", [])
+
         return {
             "plan": plan,
-            "current_stage": "architect",
+            "requirements_gaps": gaps,
+            "gap_confirmed": False,          # reset — needs gap_review pass
+            "current_stage": "gap_review",
             "errors": state.get("errors", []),
         }
     except json.JSONDecodeError as e:
@@ -57,6 +65,8 @@ def planner_agent(state: ArchitectState) -> dict:
                 "availability_requirement": "99.9%", "key_services": [],
                 "constraints": {}, "non_functional": {},
             },
+            "requirements_gaps": [],
+            "gap_confirmed": True,           # skip review on parse error
             "current_stage": "architect",
             "errors": errors,
         }
@@ -67,4 +77,7 @@ def planner_agent(state: ArchitectState) -> dict:
                 "portal.azure.com → Azure OpenAI → your resource → Deployments."
             ) from e
         errors = list(state.get("errors", [])) + [f"Planner error: {e}"]
-        return {"plan": {}, "current_stage": "architect", "errors": errors}
+        return {
+            "plan": {}, "requirements_gaps": [], "gap_confirmed": True,
+            "current_stage": "architect", "errors": errors,
+        }
