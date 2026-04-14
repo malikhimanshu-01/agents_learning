@@ -47,171 +47,9 @@ def _format_plan(plan: dict) -> str:
     return "\n".join(lines)
 
 
-def _format_architecture(arch: dict) -> str:
-    if not arch:
-        return "_No architecture data available._"
-
-    components  = arch.get("components", [])
-    networking  = arch.get("networking", {})
-    security    = arch.get("security", {})
-    dr          = arch.get("disaster_recovery", {})
-    cost        = arch.get("estimated_monthly_cost_usd", 0)
-
-    lines = []
-
-    # ── Header ────────────────────────────────────────────────────────────────
-    lines += [
-        f"## 🏗️ {arch.get('architecture_name', 'Azure Solution')}",
-        "",
-        f"> {arch.get('description', '')}",
-        "",
-    ]
-
-    # ── Components table ──────────────────────────────────────────────────────
-    lines += [
-        f"### 📦 Components ({len(components)} resources)",
-        "",
-        "| # | Resource Name | Azure Service | SKU / Size | Tier | Redundancy | Region | Purpose |",
-        "|---|---------------|--------------|------------|------|-----------|--------|---------|",
-    ]
-    for i, comp in enumerate(components, 1):
-        lines.append(
-            f"| {i} "
-            f"| **{comp.get('name', '—')}** "
-            f"| {comp.get('azure_service', '—')} "
-            f"| `{comp.get('sku', 'N/A')}` "
-            f"| {comp.get('tier', '—')} "
-            f"| {comp.get('redundancy', 'None')} "
-            f"| {comp.get('region', '—')} "
-            f"| {comp.get('purpose', '—')} |"
-        )
-
-    # ── Networking ────────────────────────────────────────────────────────────
-    if networking:
-        lines += [
-            "",
-            "### 🌐 Networking",
-            "",
-            f"- **VNet CIDR:** `{networking.get('vnet_cidr', 'N/A')}`",
-            f"- **DNS:** {networking.get('dns', 'N/A')}",
-        ]
-        subnets = networking.get("subnets", [])
-        if subnets:
-            lines += [
-                "",
-                "**Subnets:**",
-                "",
-                "| Subnet Name | CIDR | Purpose |",
-                "|-------------|------|---------|",
-            ]
-            for sn in subnets:
-                lines.append(
-                    f"| {sn.get('name', '—')} "
-                    f"| `{sn.get('cidr', '—')}` "
-                    f"| {sn.get('purpose', '—')} |"
-                )
-        private_eps = networking.get("private_endpoints", [])
-        if private_eps:
-            lines += [
-                "",
-                f"**Private Endpoints:** {', '.join(f'`{e}`' for e in private_eps)}",
-            ]
-
-    # ── Security ──────────────────────────────────────────────────────────────
-    if security:
-        lines += [
-            "",
-            "### 🔐 Security",
-            "",
-            f"- **Identity:** {security.get('identity', 'N/A')}",
-            f"- **Key Vault:** {security.get('key_vault', 'N/A')}",
-            f"- **Defender for Cloud:** {'✅ Enabled' if security.get('defender_for_cloud') else '❌ Disabled'}",
-            f"- **DDoS Protection:** {'✅ Enabled' if security.get('ddos_protection') else '❌ Disabled'}",
-        ]
-        rbac = security.get("rbac", [])
-        if rbac:
-            lines += ["", "**RBAC Assignments:**"]
-            for role in rbac:
-                lines.append(f"  - {role}")
-
-    # ── Disaster Recovery ─────────────────────────────────────────────────────
-    if dr:
-        lines += [
-            "",
-            "### 🔄 Disaster Recovery",
-            "",
-            f"| Strategy | RTO | RPO |",
-            f"|----------|-----|-----|",
-            f"| **{dr.get('strategy', 'N/A')}** | {dr.get('rto_minutes', '—')} min | {dr.get('rpo_minutes', '—')} min |",
-        ]
-
-    # ── Cost ──────────────────────────────────────────────────────────────────
-    if cost:
-        lines += [
-            "",
-            "### 💰 Estimated Cost",
-            "",
-            f"**${cost:,} / month**",
-        ]
-
-    return "\n".join(lines)
-
-
-def _format_evaluation(eval_data: dict) -> str:
-    if not eval_data:
-        return "_No evaluation data available._"
-    scores = eval_data.get("scores", {})
-    passed = eval_data.get("passed", False)
-    status = "✅ PASSED" if passed else "❌ FAILED"
+def _render_components(components: list, show_why: bool = True) -> list:
+    """Render a components list into markdown lines."""
     lines = [
-        f"**Status:** {status} | **Overall Score:** {eval_data.get('overall_score', 0)}/100",
-        "",
-        "| WAF Pillar | Score |",
-        "|---|---|",
-        f"| Reliability | {scores.get('reliability', 0)}/100 |",
-        f"| Security | {scores.get('security', 0)}/100 |",
-        f"| Cost Optimization | {scores.get('cost_optimization', 0)}/100 |",
-        f"| Operational Excellence | {scores.get('operational_excellence', 0)}/100 |",
-        f"| Performance Efficiency | {scores.get('performance_efficiency', 0)}/100 |",
-        "",
-        f"**Summary:** {eval_data.get('summary', '')}",
-    ]
-    issues = eval_data.get("critical_issues", [])
-    if issues:
-        lines.append("\n**Critical Issues:**")
-        for issue in issues:
-            lines.append(f"- ❌ {issue}")
-    strengths = eval_data.get("strengths", [])
-    if strengths:
-        lines.append("\n**Strengths:**")
-        for s in strengths[:4]:
-            lines.append(f"- ✅ {s}")
-    improvements = eval_data.get("improvements", [])
-    if improvements and not passed:
-        lines.append("\n**Recommended Improvements:**")
-        for imp in improvements[:3]:
-            lines.append(f"- 💡 {imp}")
-    return "\n".join(lines)
-
-
-def _format_approval_summary(arch: dict, eval_data: dict) -> str:
-    """Full structured architecture + WAF scores for the human approval card."""
-    scores     = eval_data.get("scores", {})
-    components = arch.get("components", [])
-    networking = arch.get("networking", {})
-    security   = arch.get("security", {})
-    dr         = arch.get("disaster_recovery", {})
-    cost       = arch.get("estimated_monthly_cost_usd", 0)
-    name       = arch.get("architecture_name", "Azure Solution")
-
-    lines = [
-        f"## 🏗️ {name}",
-        "",
-        f"> {arch.get('description', '')}",
-        "",
-        "---",
-        "",
-        # Components
         f"### 📦 Components ({len(components)} resources)",
         "",
         "| # | Resource Name | Azure Service | SKU / Size | Tier | Redundancy | Region |",
@@ -226,56 +64,323 @@ def _format_approval_summary(arch: dict, eval_data: dict) -> str:
             f"| {comp.get('redundancy','None')} "
             f"| {comp.get('region','—')} |"
         )
+    if show_why:
+        lines += ["", "**Design Decisions (WHY + Trade-offs):**", ""]
+        for comp in components:
+            why      = comp.get("why", "")
+            tradeoff = comp.get("tradeoffs", "")
+            purpose  = comp.get("purpose", "")
+            if why or tradeoff:
+                lines.append(f"**{comp.get('name','—')}** — {purpose}")
+                if why:
+                    lines.append(f"- 🎯 **Why:** {why}")
+                if tradeoff:
+                    lines.append(f"- ⚠️ **Trade-off:** {tradeoff}")
+                lines.append("")
+    return lines
 
-    # Networking
-    if networking:
-        subnets = networking.get("subnets", [])
-        lines += [
-            "",
-            "### 🌐 Networking",
-            "",
-            f"- **VNet CIDR:** `{networking.get('vnet_cidr','N/A')}`",
-            f"- **DNS:** {networking.get('dns','N/A')}",
-            f"- **Private Endpoints:** {', '.join(f'`{e}`' for e in networking.get('private_endpoints',[]))}",
-        ]
-        if subnets:
-            lines += [
-                "",
-                "| Subnet | CIDR | Purpose |",
-                "|--------|------|---------|",
-            ]
-            for sn in subnets:
-                lines.append(f"| {sn.get('name','—')} | `{sn.get('cidr','—')}` | {sn.get('purpose','—')} |")
 
-    # Security
-    if security:
-        lines += [
-            "",
-            "### 🔐 Security",
-            "",
-            f"- **Identity:** {security.get('identity','N/A')}",
-            f"- **Key Vault:** {security.get('key_vault','N/A')}",
-            f"- **Defender for Cloud:** {'✅ Enabled' if security.get('defender_for_cloud') else '❌ Disabled'}",
-            f"- **DDoS Protection:** {'✅ Enabled' if security.get('ddos_protection') else '❌ Disabled'}",
-        ]
-
-    # DR
-    if dr:
-        lines += [
-            "",
-            "### 🔄 Disaster Recovery",
-            "",
-            "| Strategy | RTO | RPO |",
-            "|----------|-----|-----|",
-            f"| **{dr.get('strategy','N/A')}** | {dr.get('rto_minutes','—')} min | {dr.get('rpo_minutes','—')} min |",
-        ]
-
-    # WAF scores
-    lines += [
+def _render_networking(networking: dict) -> list:
+    if not networking:
+        return []
+    lines = [
+        "### 🌐 Networking",
         "",
+        f"- **VNet CIDR:** `{networking.get('vnet_cidr','N/A')}`",
+        f"- **DNS:** {networking.get('dns','N/A')}",
+    ]
+    private_eps = networking.get("private_endpoints", [])
+    if private_eps:
+        lines.append(f"- **Private Endpoints:** {', '.join(f'`{e}`' for e in private_eps)}")
+    subnets = networking.get("subnets", [])
+    if subnets:
+        lines += [
+            "",
+            "| Subnet | CIDR | Purpose |",
+            "|--------|------|---------|",
+        ]
+        for sn in subnets:
+            lines.append(f"| {sn.get('name','—')} | `{sn.get('cidr','—')}` | {sn.get('purpose','—')} |")
+    return lines
+
+
+def _render_security(security: dict) -> list:
+    if not security:
+        return []
+    lines = [
+        "### 🔐 Security",
+        "",
+        f"- **Identity:** {security.get('identity','N/A')}",
+        f"- **Key Vault:** {security.get('key_vault','N/A')}",
+        f"- **Defender for Cloud:** {'✅ Enabled' if security.get('defender_for_cloud') else '❌ Disabled'}",
+        f"- **DDoS Protection:** {'✅ Enabled' if security.get('ddos_protection') else '❌ Disabled'}",
+    ]
+    for role in security.get("rbac", []):
+        lines.append(f"  - {role}")
+    return lines
+
+
+def _render_dr(dr: dict) -> list:
+    if not dr:
+        return []
+    primary   = dr.get("primary_region", "—")
+    secondary = dr.get("secondary_region", "—")
+    return [
+        "### 🔄 Disaster Recovery",
+        "",
+        "| Strategy | Primary Region | Secondary Region | RTO | RPO |",
+        "|----------|---------------|-----------------|-----|-----|",
+        f"| **{dr.get('strategy','N/A')}** | {primary} | {secondary} "
+        f"| {dr.get('rto_minutes','—')} min | {dr.get('rpo_minutes','—')} min |",
+        "",
+        f"- **Failover Mechanism:** {dr.get('failover_mechanism','N/A')}",
+    ]
+
+
+def _render_monitoring(monitoring: dict) -> list:
+    if not monitoring:
+        return []
+    lines = [
+        "### 📊 Monitoring & Alerting",
+        "",
+        f"- **Tools:** {', '.join(monitoring.get('tools', []))}",
+        f"- **Dashboards:** {', '.join(monitoring.get('dashboards', []))}",
+    ]
+    alerts = monitoring.get("alerts", [])
+    if alerts:
+        lines += [
+            "",
+            "**Configured Alerts:**",
+            "",
+            "| Alert | Metric | Threshold | Severity | Action |",
+            "|-------|--------|-----------|----------|--------|",
+        ]
+        for a in alerts:
+            lines.append(
+                f"| {a.get('name','—')} "
+                f"| `{a.get('metric','—')}` "
+                f"| {a.get('threshold','—')} "
+                f"| **{a.get('severity','—')}** "
+                f"| {a.get('action','—')} |"
+            )
+    return lines
+
+
+def _render_cost_breakdown(cost_breakdown: list, total: int) -> list:
+    if not cost_breakdown:
+        return [f"### 💰 Estimated Cost", "", f"**${total:,} / month**"]
+    lines = [
+        "### 💰 Cost Breakdown",
+        "",
+        "| Service | SKU | Monthly (USD) | Notes |",
+        "|---------|-----|--------------|-------|",
+    ]
+    for item in cost_breakdown:
+        usd = item.get("monthly_usd", 0)
+        lines.append(
+            f"| {item.get('service','—')} "
+            f"| `{item.get('sku','—')}` "
+            f"| **${usd:,}** "
+            f"| {item.get('notes','—')} |"
+        )
+    lines += ["", f"**Total: ${total:,} / month**"]
+    return lines
+
+
+def _render_alternative(alt: dict) -> list:
+    if not alt:
+        return []
+    alt_cost = alt.get("estimated_monthly_cost_usd", 0)
+    lines = [
+        "### 🔀 Alternative Variant — " + alt.get("variant_label", "Cost-Optimized"),
+        "",
+        f"> {alt.get('description', '')}",
+        "",
+        f"**Best for:** {alt.get('best_for', 'N/A')}",
+        f"**Estimated Cost:** ${alt_cost:,} / month",
+        "",
+        "**Key Differences from Primary:**",
+    ]
+    for diff in alt.get("key_differences", []):
+        lines.append(f"- {diff}")
+    return lines
+
+
+def _render_comparison(comparison: dict) -> list:
+    if not comparison:
+        return []
+    lines = [
+        "### ⚖️ Variant Comparison",
+        "",
+        "| Performance-Optimized ✅ | Cost-Optimized 💸 |",
+        "|--------------------------|------------------|",
+    ]
+    primary_adv = comparison.get("primary_advantages", [])
+    alt_adv     = comparison.get("alternative_advantages", [])
+    max_rows = max(len(primary_adv), len(alt_adv))
+    for i in range(max_rows):
+        p = primary_adv[i] if i < len(primary_adv) else ""
+        a = alt_adv[i]     if i < len(alt_adv)     else ""
+        lines.append(f"| {p} | {a} |")
+    lines += ["", f"**Recommendation:** {comparison.get('recommendation', '')}"]
+    return lines
+
+
+def _format_architecture(arch: dict) -> str:
+    if not arch:
+        return "_No architecture data available._"
+
+    components     = arch.get("components", [])
+    networking     = arch.get("networking", {})
+    security       = arch.get("security", {})
+    dr             = arch.get("disaster_recovery", {})
+    monitoring     = arch.get("monitoring", {})
+    cost_breakdown = arch.get("cost_breakdown", [])
+    total_cost     = arch.get("estimated_monthly_cost_usd", 0)
+    alt            = arch.get("alternative_variant", {})
+    comparison     = arch.get("comparison", {})
+    confidence     = arch.get("confidence_score")
+    conf_reason    = arch.get("confidence_reasoning", "")
+    variant_label  = arch.get("variant_label", "Performance-Optimized")
+
+    lines = [
+        f"## 🏗️ {arch.get('architecture_name', 'Azure Solution')}",
+        f"**Variant:** {variant_label}",
+        "",
+        f"> {arch.get('description', '')}",
+        "",
+    ]
+
+    # Confidence score
+    if confidence is not None:
+        bar = "█" * (confidence // 10) + "░" * (10 - confidence // 10)
+        lines += [
+            f"**🎯 Confidence Score: {confidence}/100** `{bar}`",
+            f"_{conf_reason}_",
+            "",
+        ]
+
+    lines += _render_components(components, show_why=True) + [""]
+    lines += _render_networking(networking)   + [""]
+    lines += _render_security(security)       + [""]
+    lines += _render_dr(dr)                   + [""]
+    lines += _render_monitoring(monitoring)   + [""]
+    lines += _render_cost_breakdown(cost_breakdown, total_cost) + [""]
+
+    if alt:
+        lines += ["---", ""] + _render_alternative(alt) + [""]
+    if comparison:
+        lines += _render_comparison(comparison) + [""]
+
+    return "\n".join(lines)
+
+
+def _format_evaluation(eval_data: dict) -> str:
+    if not eval_data:
+        return "_No evaluation data available._"
+    scores  = eval_data.get("scores", {})
+    passed  = eval_data.get("passed", False)
+    status  = "✅ PASSED" if passed else "❌ FAILED"
+    overall = eval_data.get("overall_score", 0)
+    conf    = eval_data.get("confidence_score")
+
+    lines = [
+        f"**Status:** {status} | **Overall Score:** {overall}/100",
+        "",
+        "| WAF Pillar | Score | Bar |",
+        "|---|---|---|",
+    ]
+    pillar_data = [
+        ("Reliability",            scores.get("reliability", 0)),
+        ("Security",               scores.get("security", 0)),
+        ("Cost Optimization",      scores.get("cost_optimization", 0)),
+        ("Operational Excellence", scores.get("operational_excellence", 0)),
+        ("Performance Efficiency", scores.get("performance_efficiency", 0)),
+    ]
+    for pillar, score in pillar_data:
+        bar = "█" * (score // 10) + "░" * (10 - score // 10)
+        lines.append(f"| {pillar} | **{score}/100** | `{bar}` |")
+
+    if conf is not None:
+        lines += [
+            "",
+            f"**🎯 Confidence Score: {conf}/100** — _{eval_data.get('confidence_reasoning','')}_",
+        ]
+
+    lines += ["", f"**Summary:** {eval_data.get('summary', '')}"]
+
+    issues = eval_data.get("critical_issues", [])
+    if issues:
+        lines += ["", "**❌ Critical Issues:**"]
+        for issue in issues:
+            lines.append(f"- {issue}")
+
+    strengths = eval_data.get("strengths", [])
+    if strengths:
+        lines += ["", "**✅ Strengths:**"]
+        for s in strengths[:4]:
+            lines.append(f"- {s}")
+
+    improvements = eval_data.get("improvements", [])
+    if improvements and not passed:
+        lines += ["", "**💡 Improvements:**"]
+        for imp in improvements[:4]:
+            lines.append(f"- {imp}")
+
+    return "\n".join(lines)
+
+
+def _format_approval_summary(arch: dict, eval_data: dict) -> str:
+    """Full structured architecture + WAF scores for the human approval card."""
+    scores         = eval_data.get("scores", {})
+    components     = arch.get("components", [])
+    networking     = arch.get("networking", {})
+    security       = arch.get("security", {})
+    dr             = arch.get("disaster_recovery", {})
+    monitoring     = arch.get("monitoring", {})
+    cost_breakdown = arch.get("cost_breakdown", [])
+    total_cost     = arch.get("estimated_monthly_cost_usd", 0)
+    alt            = arch.get("alternative_variant", {})
+    comparison     = arch.get("comparison", {})
+    confidence     = arch.get("confidence_score")
+    variant_label  = arch.get("variant_label", "Performance-Optimized")
+    name           = arch.get("architecture_name", "Azure Solution")
+
+    lines = [
+        f"## 🏗️ {name}  ·  {variant_label}",
+        "",
+        f"> {arch.get('description', '')}",
+        "",
+    ]
+
+    if confidence is not None:
+        bar = "█" * (confidence // 10) + "░" * (10 - confidence // 10)
+        lines += [
+            f"**🎯 Confidence: {confidence}/100** `{bar}`  ·  "
+            f"_{arch.get('confidence_reasoning','')}_",
+            "",
+        ]
+
+    lines += ["---", ""]
+    lines += _render_components(components, show_why=True) + [""]
+    lines += _render_networking(networking)   + [""]
+    lines += _render_security(security)       + [""]
+    lines += _render_dr(dr)                   + [""]
+    lines += _render_monitoring(monitoring)   + [""]
+    lines += _render_cost_breakdown(cost_breakdown, total_cost) + [""]
+
+    if alt:
+        lines += ["---", ""] + _render_alternative(alt) + [""]
+    if comparison:
+        lines += _render_comparison(comparison) + [""]
+
+    # WAF summary
+    overall = eval_data.get("overall_score", 0)
+    conf_eval = eval_data.get("confidence_score")
+    lines += [
         "---",
         "",
-        "### ⚖️ Well-Architected Framework Scores",
+        "### ⚖️ Well-Architected Framework Review",
         "",
         "| Pillar | Score |",
         "|--------|-------|",
@@ -285,11 +390,11 @@ def _format_approval_summary(arch: dict, eval_data: dict) -> str:
         f"| Operational Excellence | **{scores.get('operational_excellence', 0)}/100** |",
         f"| Performance Efficiency | **{scores.get('performance_efficiency', 0)}/100** |",
         "",
-        f"**Overall Score:** {eval_data.get('overall_score', 0)}/100 &nbsp;|&nbsp; "
-        f"**Estimated Monthly Cost:** ${cost:,}",
-        "",
-        f"_{eval_data.get('summary', '')}_",
+        f"**Overall: {overall}/100**",
     ]
+    if conf_eval is not None:
+        lines.append(f"**Evaluator Confidence: {conf_eval}/100** — _{eval_data.get('confidence_reasoning','')}_")
+    lines += ["", f"_{eval_data.get('summary', '')}_"]
 
     return "\n".join(lines)
 
