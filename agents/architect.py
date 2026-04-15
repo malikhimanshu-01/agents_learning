@@ -38,6 +38,12 @@ def _extract_json(content: str) -> dict:
 
 def architect_agent(state: ArchitectState) -> dict:
     plan = state.get("plan", {})
+    loop_count = state.get("loop_count", 0)
+
+    # Capture redesign_notes the redesigner embedded in the previous architecture
+    # before we overwrite it with our new generation.
+    prev_redesign_notes = state.get("architecture", {}).get("redesign_notes", [])
+
     try:
         user_context = (
             f"Requirements Plan:\n{json.dumps(plan, indent=2)}\n\n"
@@ -49,8 +55,25 @@ def architect_agent(state: ArchitectState) -> dict:
         ]
         response = llm.invoke(messages)
         architecture = _extract_json(response.content)
+
+        # ── Snapshot for architecture history ────────────────────────────────
+        history = list(state.get("architecture_history", []))
+        label = "Initial Design" if loop_count == 0 else f"Redesign Loop {loop_count}"
+        history.append({
+            "loop": loop_count,
+            "label": label,
+            "architecture_name": architecture.get("architecture_name", "Azure Solution"),
+            "description": architecture.get("description", ""),
+            "confidence_score": architecture.get("confidence_score"),
+            "estimated_monthly_cost_usd": architecture.get("estimated_monthly_cost_usd", 0),
+            "component_count": len(architecture.get("components", [])),
+            "deployment_complexity": architecture.get("deployment_complexity", {}),
+            "redesign_notes": prev_redesign_notes,  # what the redesigner changed to produce this version
+        })
+
         return {
             "architecture": architecture,
+            "architecture_history": history,
             "current_stage": "evaluator",
             "errors": state.get("errors", []),
         }
@@ -64,6 +87,7 @@ def architect_agent(state: ArchitectState) -> dict:
                 "disaster_recovery": {"rto_minutes": 60, "rpo_minutes": 30, "strategy": "Active-Passive"},
                 "estimated_monthly_cost_usd": 0,
             },
+            "architecture_history": state.get("architecture_history", []),
             "current_stage": "evaluator",
             "errors": errors,
         }
@@ -74,4 +98,9 @@ def architect_agent(state: ArchitectState) -> dict:
                 "portal.azure.com → Azure OpenAI → your resource → Deployments."
             ) from e
         errors = list(state.get("errors", [])) + [f"Architect error: {e}"]
-        return {"architecture": {}, "current_stage": "evaluator", "errors": errors}
+        return {
+            "architecture": {},
+            "architecture_history": state.get("architecture_history", []),
+            "current_stage": "evaluator",
+            "errors": errors,
+        }

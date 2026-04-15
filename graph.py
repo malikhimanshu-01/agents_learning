@@ -11,6 +11,7 @@ from agents.planner import planner_agent
 from agents.architect import architect_agent
 from agents.evaluator import evaluator_agent
 from agents.redesigner import redesigner_agent
+from agents.security_auditor import security_auditor_agent
 from agents.arm_generator import arm_generator_agent
 
 
@@ -42,7 +43,6 @@ def gap_review_node(state: ArchitectState) -> dict:
 
     # result is True → confirmed, or a non-empty string → user clarification
     if isinstance(result, str) and result.strip():
-        # Merge clarification into original user_input so planner gets richer context
         clarification = result.strip()
         enriched_input = (
             state["user_input"]
@@ -67,8 +67,9 @@ def gap_review_node(state: ArchitectState) -> dict:
 
 def human_approval_node(state: ArchitectState) -> dict:
     """Pause pipeline and wait for human decision via Chainlit action button."""
-    architecture = state.get("architecture", {})
-    evaluation   = state.get("evaluation", {})
+    architecture  = state.get("architecture", {})
+    evaluation    = state.get("evaluation", {})
+    security_audit = state.get("security_audit", {})
 
     human_decision = interrupt(
         {
@@ -77,6 +78,8 @@ def human_approval_node(state: ArchitectState) -> dict:
             "overall_score": evaluation.get("overall_score", 0),
             "passed": evaluation.get("passed", False),
             "summary": evaluation.get("summary", ""),
+            "security_grade": security_audit.get("security_grade", "—"),
+            "security_score": security_audit.get("overall_score", 0),
         }
     )
 
@@ -90,14 +93,28 @@ def human_approval_node(state: ArchitectState) -> dict:
 # ─── Routing functions ────────────────────────────────────────────────────────
 
 def route_after_gap_review(state: ArchitectState) -> str:
-    """If user confirmed → architect. If clarification given → re-run planner."""
     return "architect" if state.get("gap_confirmed", True) else "planner"
 
 
 def route_after_evaluation(state: ArchitectState) -> str:
-    """Route to redesigner (if loops remain) or human_approval."""
+    """WAF evaluator: pass → security audit. Fail → redesigner (or force approval)."""
     evaluation = state.get("evaluation", {})
     passed     = evaluation.get("passed", False)
+    loop_count = state.get("loop_count", 0)
+    max_loops  = state.get("max_loops", 3)
+
+    if passed:
+        return "security_auditor"
+    elif loop_count < max_loops:
+        return "redesigner"
+    else:
+        return "security_auditor"   # after max loops, audit what we have
+
+
+def route_after_security_audit(state: ArchitectState) -> str:
+    """Security audit: pass → human approval. Fail → redesigner (if loops remain)."""
+    audit      = state.get("security_audit", {})
+    passed     = audit.get("passed", True)
     loop_count = state.get("loop_count", 0)
     max_loops  = state.get("max_loops", 3)
 
@@ -106,11 +123,10 @@ def route_after_evaluation(state: ArchitectState) -> str:
     elif loop_count < max_loops:
         return "redesigner"
     else:
-        return "human_approval"
+        return "human_approval"   # surface to human after exhausting loops
 
 
 def route_after_approval(state: ArchitectState) -> str:
-    """Route to ARM generator or END based on human decision."""
     return "arm_generator" if state.get("human_approved") else END
 
 
@@ -118,13 +134,14 @@ def route_after_approval(state: ArchitectState) -> str:
 
 builder = StateGraph(ArchitectState)
 
-builder.add_node("planner",       planner_agent)
-builder.add_node("gap_review",    gap_review_node)
-builder.add_node("architect",     architect_agent)
-builder.add_node("evaluator",     evaluator_agent)
-builder.add_node("redesigner",    redesigner_agent)
-builder.add_node("human_approval", human_approval_node)
-builder.add_node("arm_generator", arm_generator_agent)
+builder.add_node("planner",          planner_agent)
+builder.add_node("gap_review",       gap_review_node)
+builder.add_node("architect",        architect_agent)
+builder.add_node("evaluator",        evaluator_agent)
+builder.add_node("security_auditor", security_auditor_agent)
+builder.add_node("redesigner",       redesigner_agent)
+builder.add_node("human_approval",   human_approval_node)
+builder.add_node("arm_generator",    arm_generator_agent)
 
 # Entry
 builder.set_entry_point("planner")
@@ -132,20 +149,27 @@ builder.set_entry_point("planner")
 # planner → gap_review (always)
 builder.add_edge("planner", "gap_review")
 
-# gap_review → architect (confirmed) OR planner (clarification provided)
+# gap_review → architect (confirmed) OR planner (clarification)
 builder.add_conditional_edges(
     "gap_review",
     route_after_gap_review,
     {"architect": "architect", "planner": "planner"},
 )
 
-# architect → evaluator
+# architect → evaluator (always)
 builder.add_edge("architect", "evaluator")
 
-# evaluator → redesigner (loop) OR human_approval
+# evaluator → security_auditor (passed) OR redesigner (failed)
 builder.add_conditional_edges(
     "evaluator",
     route_after_evaluation,
+    {"security_auditor": "security_auditor", "redesigner": "redesigner"},
+)
+
+# security_auditor → human_approval (passed) OR redesigner (failed)
+builder.add_conditional_edges(
+    "security_auditor",
+    route_after_security_audit,
     {"human_approval": "human_approval", "redesigner": "redesigner"},
 )
 

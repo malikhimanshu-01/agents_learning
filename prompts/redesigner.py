@@ -10,6 +10,10 @@ HARD RULES (same as original architect — never violate):
 5. Every component must have "why" and "tradeoffs" fields
 6. Cost must be a per-service breakdown in cost_breakdown
 7. Monitoring must include named alerts with metrics, thresholds, severity
+8. Monitoring MUST include all THREE of these as separate components[] entries with their own cost_breakdown lines:
+   (a) Azure Application Insights — SKU: Standard. APM, tracing, live metrics.
+   (b) Azure Log Analytics Workspace — SKU: PerGB2018. Include log_retention_days (min 30).
+   (c) Azure Monitor Action Group — SKU: N/A. Receivers: email, SMS, or webhook per alert.
 
 Return the FULL improved architecture in the exact same JSON format as the architect output:
 {
@@ -46,7 +50,18 @@ Return the FULL improved architecture in the exact same JSON format as the archi
   },
   "confidence_score": number,
   "confidence_reasoning": "string",
-  "redesign_notes": ["what changed and exactly why for each fix — be specific"]
+  "redesign_notes": ["what changed and exactly why for each fix — be specific"],
+  "deployment_complexity": {
+    "score": "integer 1-10",
+    "level": "Low | Medium | High | Very High",
+    "setup_time_hours": "range e.g. '4-8'",
+    "iac_recommendation": "ARM | Bicep | Terraform",
+    "iac_reason": "one sentence",
+    "cicd_required": true or false,
+    "cicd_suggestion": "specific CI/CD pipeline steps",
+    "complexity_factors": ["list of specific complexity drivers"],
+    "prerequisites": ["skills or existing Azure services required"]
+  }
 }
 
 Return ONLY valid JSON.

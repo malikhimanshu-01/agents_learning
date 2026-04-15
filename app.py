@@ -15,12 +15,13 @@ from graph import pipeline
 # ─── Display helpers ─────────────────────────────────────────────────────────
 
 NODE_DISPLAY = {
-    "planner": "📋 Planner Agent",
-    "architect": "🏗️ Architect Agent",
-    "evaluator": "⚖️ Evaluator Agent",
-    "redesigner": "🔄 Redesigner Agent",
-    "arm_generator": "📄 ARM Generator",
-    "human_approval": "👤 Human Approval",
+    "planner":          "📋 Planner Agent",
+    "architect":        "🏗️ Architect Agent",
+    "evaluator":        "⚖️ Evaluator Agent",
+    "security_auditor": "🔒 Security Auditor",
+    "redesigner":       "🔄 Redesigner Agent",
+    "arm_generator":    "📄 ARM Generator",
+    "human_approval":   "👤 Human Approval",
 }
 
 
@@ -226,22 +227,130 @@ def _render_comparison(comparison: dict) -> list:
     return lines
 
 
+def _format_variant_table(va: dict, vb: dict) -> str:
+    """Side-by-side structured comparison table for both variants."""
+    if not va or not vb:
+        return ""
+
+    cost_a  = va.get("estimated_monthly_cost_usd", 0)
+    cost_b  = vb.get("estimated_monthly_cost_usd", 0)
+    cx_a    = va.get("deployment_complexity", {})
+    cx_b    = vb.get("deployment_complexity", {})
+    dr_a    = va.get("disaster_recovery", {})
+    dr_b    = vb.get("disaster_recovery", {})
+    mon_a   = va.get("monitoring", {})
+    mon_b   = vb.get("monitoring", {})
+    comp_a  = len(va.get("components", []))
+    comp_b  = len(vb.get("components", []))
+    alerts_a = len(mon_a.get("alerts", []))
+    alerts_b = len(mon_b.get("alerts", []))
+
+    savings = 0
+    if isinstance(cost_a, (int, float)) and isinstance(cost_b, (int, float)) and cost_a > 0:
+        savings = round(((cost_a - cost_b) / cost_a) * 100)
+
+    cost_a_str = f"${cost_a:,}" if isinstance(cost_a, (int, float)) else str(cost_a)
+    cost_b_str = f"${cost_b:,}" if isinstance(cost_b, (int, float)) else str(cost_b)
+
+    lines = [
+        "### 📊 Side-by-Side Comparison",
+        "",
+        f"| | **Option A: Performance-Optimized** | **Option B: Cost-Optimized** |",
+        f"|---|---|---|",
+        f"| 💰 Monthly Cost | {cost_a_str} | {cost_b_str} ({savings}% cheaper) |",
+        f"| 📦 Components | {comp_a} resources | {comp_b} resources |",
+        f"| 🚀 Complexity | {cx_a.get('level','N/A')} ({cx_a.get('score','?')}/10) | {cx_b.get('level','N/A')} ({cx_b.get('score','?')}/10) |",
+        f"| ⏱️ Setup Time | ~{cx_a.get('setup_time_hours','?')}h | ~{cx_b.get('setup_time_hours','?')}h |",
+        f"| 🔧 IaC Tooling | {cx_a.get('iac_recommendation','N/A')} | {cx_b.get('iac_recommendation','N/A')} |",
+        f"| ⚙️ CI/CD Needed | {'✅ Yes' if cx_a.get('cicd_required') else '❌ No'} | {'✅ Yes' if cx_b.get('cicd_required') else '❌ No'} |",
+        f"| 🌍 Primary Region | {dr_a.get('primary_region','N/A')} | {dr_b.get('primary_region','N/A')} |",
+        f"| 🌍 Secondary Region | {dr_a.get('secondary_region','N/A')} | {dr_b.get('secondary_region','N/A')} |",
+        f"| 🔄 DR Strategy | {dr_a.get('strategy','N/A')} | {dr_b.get('strategy','N/A')} |",
+        f"| ⏰ RTO / RPO | {dr_a.get('rto_minutes','?')}m / {dr_a.get('rpo_minutes','?')}m | {dr_b.get('rto_minutes','?')}m / {dr_b.get('rpo_minutes','?')}m |",
+        f"| 🔔 Alert Rules | {alerts_a} configured | {alerts_b} configured |",
+    ]
+
+    # When to choose block
+    comparison = va.get("comparison", {})
+    when_a   = comparison.get("when_to_choose_a", "")
+    when_b   = comparison.get("when_to_choose_b", "")
+    upgrade  = comparison.get("upgrade_path", "")
+
+    if when_a or when_b:
+        lines += [
+            "",
+            "---",
+            "",
+            f"**✅ Choose Option A when:** {when_a}",
+            "",
+            f"**💸 Choose Option B when:** {when_b}",
+        ]
+    if upgrade:
+        lines += ["", f"**📈 Upgrade path B → A:** {upgrade}"]
+
+    return "\n".join(lines)
+
+
+def _render_deployment_complexity(dc: dict) -> list:
+    if not dc:
+        return []
+    score   = dc.get("score", 0)
+    level   = dc.get("level", "Medium")
+    hours   = dc.get("setup_time_hours", "N/A")
+    iac     = dc.get("iac_recommendation", "Terraform")
+    iac_why = dc.get("iac_reason", "")
+    cicd    = dc.get("cicd_required", False)
+    cicd_sg = dc.get("cicd_suggestion", "")
+
+    level_icon = {"Low": "🟢", "Medium": "🟡", "High": "🟠", "Very High": "🔴"}.get(level, "🟡")
+    bar = "█" * int(score) + "░" * (10 - int(score))
+
+    lines = [
+        "### 🚀 Deployment Complexity",
+        "",
+        f"**{level_icon} {level} ({score}/10)** `{bar}`",
+        "",
+        f"| | |",
+        f"|---|---|",
+        f"| ⏱️ **Estimated Setup Time** | {hours} hours |",
+        f"| 🔧 **Recommended IaC** | **{iac}** — {iac_why} |",
+        f"| ⚙️ **CI/CD Required** | {'✅ Yes' if cicd else '❌ No'} |",
+    ]
+    if cicd and cicd_sg:
+        lines.append(f"| ⚙️ **CI/CD Pipeline** | {cicd_sg} |")
+
+    factors = dc.get("complexity_factors", [])
+    if factors:
+        lines += ["", "**Complexity Drivers:**"]
+        for f in factors:
+            lines.append(f"- {f}")
+
+    prereqs = dc.get("prerequisites", [])
+    if prereqs:
+        lines += ["", "**Prerequisites:**"]
+        for p in prereqs:
+            lines.append(f"- {p}")
+
+    return lines
+
+
 def _format_architecture(arch: dict) -> str:
     if not arch:
         return "_No architecture data available._"
 
-    components     = arch.get("components", [])
-    networking     = arch.get("networking", {})
-    security       = arch.get("security", {})
-    dr             = arch.get("disaster_recovery", {})
-    monitoring     = arch.get("monitoring", {})
-    cost_breakdown = arch.get("cost_breakdown", [])
-    total_cost     = arch.get("estimated_monthly_cost_usd", 0)
-    alt            = arch.get("alternative_variant", {})
-    comparison     = arch.get("comparison", {})
-    confidence     = arch.get("confidence_score")
-    conf_reason    = arch.get("confidence_reasoning", "")
-    variant_label  = arch.get("variant_label", "Performance-Optimized")
+    components        = arch.get("components", [])
+    networking        = arch.get("networking", {})
+    security          = arch.get("security", {})
+    dr                = arch.get("disaster_recovery", {})
+    monitoring        = arch.get("monitoring", {})
+    cost_breakdown    = arch.get("cost_breakdown", [])
+    total_cost        = arch.get("estimated_monthly_cost_usd", 0)
+    alt               = arch.get("alternative_variant", {})
+    comparison        = arch.get("comparison", {})
+    confidence        = arch.get("confidence_score")
+    conf_reason       = arch.get("confidence_reasoning", "")
+    variant_label     = arch.get("variant_label", "Performance-Optimized")
+    deploy_complexity = arch.get("deployment_complexity", {})
 
     lines = [
         f"## 🏗️ {arch.get('architecture_name', 'Azure Solution')}",
@@ -261,16 +370,47 @@ def _format_architecture(arch: dict) -> str:
         ]
 
     lines += _render_components(components, show_why=True) + [""]
-    lines += _render_networking(networking)   + [""]
-    lines += _render_security(security)       + [""]
-    lines += _render_dr(dr)                   + [""]
-    lines += _render_monitoring(monitoring)   + [""]
+    lines += _render_networking(networking)         + [""]
+    lines += _render_security(security)             + [""]
+    lines += _render_dr(dr)                         + [""]
+    lines += _render_monitoring(monitoring)         + [""]
     lines += _render_cost_breakdown(cost_breakdown, total_cost) + [""]
+    lines += _render_deployment_complexity(deploy_complexity)   + [""]
 
+    # Full independent alternative variant
     if alt:
-        lines += ["---", ""] + _render_alternative(alt) + [""]
-    if comparison:
-        lines += _render_comparison(comparison) + [""]
+        lines += ["---", ""]
+        lines += [
+            f"## 💸 {alt.get('variant_label', 'Cost-Optimized')} Variant",
+            "",
+            f"> {alt.get('description', '')}",
+            "",
+            f"**Best for:** {alt.get('best_for', '')}",
+            "",
+        ]
+        alt_components  = alt.get("components", [])
+        alt_dc          = alt.get("deployment_complexity", {})
+        alt_cost_bd     = alt.get("cost_breakdown", [])
+        alt_total       = alt.get("estimated_monthly_cost_usd", 0)
+        lines += _render_components(alt_components, show_why=True) + [""]
+        lines += _render_networking(alt.get("networking", {}))     + [""]
+        lines += _render_security(alt.get("security", {}))         + [""]
+        lines += _render_dr(alt.get("disaster_recovery", {}))      + [""]
+        lines += _render_monitoring(alt.get("monitoring", {}))     + [""]
+        lines += _render_cost_breakdown(alt_cost_bd, alt_total)    + [""]
+        lines += _render_deployment_complexity(alt_dc)             + [""]
+
+        key_diffs = alt.get("key_differences", [])
+        if key_diffs:
+            lines += ["**Key Differences from Option A:**"]
+            for d in key_diffs:
+                lines.append(f"- {d}")
+            lines.append("")
+
+    # Side-by-side comparison table
+    variant_table = _format_variant_table(arch, alt) if alt else ""
+    if variant_table:
+        lines += ["---", "", variant_table, ""]
 
     return "\n".join(lines)
 
@@ -332,19 +472,20 @@ def _format_evaluation(eval_data: dict) -> str:
 
 def _format_approval_summary(arch: dict, eval_data: dict) -> str:
     """Full structured architecture + WAF scores for the human approval card."""
-    scores         = eval_data.get("scores", {})
-    components     = arch.get("components", [])
-    networking     = arch.get("networking", {})
-    security       = arch.get("security", {})
-    dr             = arch.get("disaster_recovery", {})
-    monitoring     = arch.get("monitoring", {})
-    cost_breakdown = arch.get("cost_breakdown", [])
-    total_cost     = arch.get("estimated_monthly_cost_usd", 0)
-    alt            = arch.get("alternative_variant", {})
-    comparison     = arch.get("comparison", {})
-    confidence     = arch.get("confidence_score")
-    variant_label  = arch.get("variant_label", "Performance-Optimized")
-    name           = arch.get("architecture_name", "Azure Solution")
+    scores            = eval_data.get("scores", {})
+    components        = arch.get("components", [])
+    networking        = arch.get("networking", {})
+    security          = arch.get("security", {})
+    dr                = arch.get("disaster_recovery", {})
+    monitoring        = arch.get("monitoring", {})
+    cost_breakdown    = arch.get("cost_breakdown", [])
+    total_cost        = arch.get("estimated_monthly_cost_usd", 0)
+    alt               = arch.get("alternative_variant", {})
+    comparison        = arch.get("comparison", {})
+    confidence        = arch.get("confidence_score")
+    variant_label     = arch.get("variant_label", "Performance-Optimized")
+    name              = arch.get("architecture_name", "Azure Solution")
+    deploy_complexity = arch.get("deployment_complexity", {})
 
     lines = [
         f"## 🏗️ {name}  ·  {variant_label}",
@@ -362,17 +503,18 @@ def _format_approval_summary(arch: dict, eval_data: dict) -> str:
         ]
 
     lines += ["---", ""]
-    lines += _render_components(components, show_why=True) + [""]
-    lines += _render_networking(networking)   + [""]
-    lines += _render_security(security)       + [""]
-    lines += _render_dr(dr)                   + [""]
-    lines += _render_monitoring(monitoring)   + [""]
-    lines += _render_cost_breakdown(cost_breakdown, total_cost) + [""]
+    lines += _render_components(components, show_why=True)         + [""]
+    lines += _render_networking(networking)                         + [""]
+    lines += _render_security(security)                             + [""]
+    lines += _render_dr(dr)                                         + [""]
+    lines += _render_monitoring(monitoring)                         + [""]
+    lines += _render_cost_breakdown(cost_breakdown, total_cost)     + [""]
+    lines += _render_deployment_complexity(deploy_complexity)       + [""]
 
-    if alt:
-        lines += ["---", ""] + _render_alternative(alt) + [""]
-    if comparison:
-        lines += _render_comparison(comparison) + [""]
+    # Side-by-side comparison table (approval card shows Option A vs B)
+    variant_table = _format_variant_table(arch, alt) if alt else ""
+    if variant_table:
+        lines += ["---", "", variant_table, ""]
 
     # WAF summary
     overall = eval_data.get("overall_score", 0)
@@ -396,6 +538,84 @@ def _format_approval_summary(arch: dict, eval_data: dict) -> str:
         lines.append(f"**Evaluator Confidence: {conf_eval}/100** — _{eval_data.get('confidence_reasoning','')}_")
     lines += ["", f"_{eval_data.get('summary', '')}_"]
 
+    return "\n".join(lines)
+
+
+# ─── Security audit display helper ──────────────────────────────────────────
+
+def _format_security_audit(audit: dict) -> str:
+    if not audit:
+        return "_No security audit data available._"
+
+    grade      = audit.get("security_grade", "—")
+    score      = audit.get("overall_score", 0)
+    passed     = audit.get("passed", False)
+    zt_score   = audit.get("zero_trust_score", 0)
+    attack_sum = audit.get("attack_surface_summary", "")
+    summary    = audit.get("summary", "")
+
+    grade_icon = {"A": "🟢", "B": "🟡", "C": "🟠", "D": "🔴", "F": "⛔"}.get(grade, "🔵")
+    status     = "✅ PASSED" if passed else "❌ FAILED"
+    score_bar  = "█" * (score // 10) + "░" * (10 - score // 10)
+    zt_bar     = "█" * (zt_score // 10) + "░" * (10 - zt_score // 10)
+
+    lines = [
+        f"**Status:** {status}  ·  **Grade:** {grade_icon} **{grade}**  ·  "
+        f"**Score:** {score}/100 `{score_bar}`",
+        "",
+        f"**Zero-Trust Score:** {zt_score}/100 `{zt_bar}`",
+        f"**Attack Surface:** {attack_sum}",
+        "",
+    ]
+
+    findings = audit.get("critical_findings", [])
+    if findings:
+        sev_order = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3}
+        findings  = sorted(findings, key=lambda x: sev_order.get(x.get("severity", "Low"), 4))
+        sev_icon  = {"Critical": "🔴", "High": "🟠", "Medium": "🟡", "Low": "🟢"}
+
+        lines += [
+            f"**{len(findings)} Finding(s):**",
+            "",
+            "| # | Sev | Category | Title | Component | Remediation |",
+            "|---|-----|----------|-------|-----------|-------------|",
+        ]
+        for i, f in enumerate(findings, 1):
+            icon = sev_icon.get(f.get("severity", "Low"), "🔵")
+            lines.append(
+                f"| {f.get('id','—')} "
+                f"| {icon} **{f.get('severity','—')}** "
+                f"| {f.get('category','—')} "
+                f"| {f.get('title','—')} "
+                f"| `{f.get('affected_component','—')}` "
+                f"| {f.get('remediation','—')} |"
+            )
+        lines.append("")
+
+    passed_checks = audit.get("passed_checks", [])
+    if passed_checks:
+        lines += [f"**✅ {len(passed_checks)} checks passed** — e.g.:"]
+        for c in passed_checks[:4]:
+            lines.append(f"- {c}")
+        if len(passed_checks) > 4:
+            lines.append(f"- _...and {len(passed_checks) - 4} more_")
+        lines.append("")
+
+    recs = audit.get("recommendations", [])
+    if recs:
+        lines += ["**💡 Recommendations:**"]
+        for r in recs[:5]:
+            lines.append(f"- {r}")
+        lines.append("")
+
+    compliance = audit.get("compliance_notes", [])
+    if compliance:
+        lines += ["**📋 Compliance Notes:**"]
+        for c in compliance:
+            lines.append(f"- {c}")
+        lines.append("")
+
+    lines.append(f"_{summary}_")
     return "\n".join(lines)
 
 
@@ -442,6 +662,81 @@ def _format_gaps(gaps: list[dict], completeness: int) -> str:
     return "\n".join(lines)
 
 
+# ─── Architecture history display ────────────────────────────────────────────
+
+def _format_architecture_history(history: list) -> str:
+    if not history:
+        return "_No architecture history available._"
+    if len(history) == 1:
+        return "_Only one design iteration — no redesigns were needed._"
+
+    lines = [
+        "## 🕰️ Design Evolution — How the Architecture Improved",
+        "",
+        "Each row is one full architect run. See how confidence, cost, and complexity shifted across loops.",
+        "",
+        "| # | Stage | Architecture Name | Confidence | Cost / mo | Components | Complexity |",
+        "|---|-------|-------------------|-----------|-----------|------------|------------|",
+    ]
+
+    for entry in history:
+        loop      = entry.get("loop", 0)
+        label     = entry.get("label", f"Loop {loop}")
+        name      = entry.get("architecture_name", "—")
+        conf      = entry.get("confidence_score")
+        cost      = entry.get("estimated_monthly_cost_usd", 0)
+        comps     = entry.get("component_count", 0)
+        dc        = entry.get("deployment_complexity", {})
+        dc_score  = dc.get("score", "—")
+        dc_level  = dc.get("level", "—")
+        conf_str  = f"{conf}/100" if conf is not None else "—"
+        cost_str  = f"${cost:,}" if cost else "—"
+        lines.append(
+            f"| {loop} | **{label}** | {name} | {conf_str} | {cost_str} | {comps} | {dc_level} ({dc_score}/10) |"
+        )
+
+    # Show redesign notes for loops > 0
+    has_notes = any(entry.get("redesign_notes") for entry in history if entry.get("loop", 0) > 0)
+    if has_notes:
+        lines += ["", "---", "", "**What Changed Each Loop:**", ""]
+        for entry in history:
+            if entry.get("loop", 0) == 0:
+                continue
+            notes = entry.get("redesign_notes", [])
+            if notes:
+                lines.append(f"**{entry['label']}** — {entry.get('architecture_name', '')}:")
+                for note in notes[:5]:
+                    lines.append(f"  - {note}")
+                lines.append("")
+
+    # Show confidence trend
+    confs = [(e.get("loop", 0), e.get("confidence_score")) for e in history if e.get("confidence_score") is not None]
+    if len(confs) > 1:
+        first_conf = confs[0][1]
+        last_conf  = confs[-1][1]
+        delta      = last_conf - first_conf
+        trend_icon = "📈" if delta > 0 else ("📉" if delta < 0 else "➡️")
+        lines += [
+            "",
+            f"**Confidence Trend:** {first_conf}/100 → {last_conf}/100 "
+            f"({trend_icon} {'+' if delta >= 0 else ''}{delta} pts across {len(confs)} iterations)",
+        ]
+
+    # Show cost trend
+    costs = [(e.get("loop", 0), e.get("estimated_monthly_cost_usd", 0)) for e in history if e.get("estimated_monthly_cost_usd")]
+    if len(costs) > 1:
+        first_cost = costs[0][1]
+        last_cost  = costs[-1][1]
+        delta_cost = last_cost - first_cost
+        cost_icon  = "📉" if delta_cost < 0 else ("📈" if delta_cost > 0 else "➡️")
+        lines += [
+            f"**Cost Trend:** ${first_cost:,} → ${last_cost:,}/mo "
+            f"({cost_icon} {'+' if delta_cost >= 0 else ''}${delta_cost:,} total shift)",
+        ]
+
+    return "\n".join(lines)
+
+
 # ─── Chainlit event handlers ─────────────────────────────────────────────────
 
 @cl.on_chat_start
@@ -460,10 +755,11 @@ Welcome! I'm your AI-powered Azure Solution Architect — a **multi-agent pipeli
 | 1 | 📋 Planner | Extracts requirements + detects gaps |
 | 1b | 👤 You | Review gaps & confirm or clarify |
 | 2 | 🏗️ Architect | Designs complete Azure topology (2 variants) |
-| 3 | ⚖️ Evaluator | WAF review + confidence scoring |
-| 4 | 🔄 Redesigner | Auto-fixes issues (up to 3 loops) |
-| 5 | 👤 You | Review & approve final design |
-| 6 | 📄 ARM Generator | Produces a deployable ARM template |
+| 3 | ⚖️ Evaluator | WAF review + budget + confidence scoring |
+| 4 | 🔒 Security Auditor | Deep security audit — grade A–F, Zero Trust score |
+| 5 | 🔄 Redesigner | Auto-fixes WAF or security issues (up to 3 loops) |
+| 6 | 👤 You | Review & approve final design |
+| 7 | 📄 ARM Generator | Produces a deployable ARM template |
 
 ---
 
@@ -479,28 +775,31 @@ async def on_message(message: cl.Message):
     config    = {"configurable": {"thread_id": thread_id}}
 
     initial_state = {
-        "user_input":         message.content,
-        "plan":               {},
-        "requirements_gaps":  [],
-        "gap_confirmed":      None,
-        "architecture":       {},
-        "evaluation":         {},
-        "loop_count":         0,
-        "max_loops":          3,
-        "human_approved":     None,
-        "arm_template":       {},
-        "current_stage":      "planner",
-        "errors":             [],
+        "user_input":            message.content,
+        "plan":                  {},
+        "requirements_gaps":     [],
+        "gap_confirmed":         None,
+        "architecture":          {},
+        "architecture_history":  [],
+        "evaluation":            {},
+        "security_audit":        {},
+        "loop_count":            0,
+        "max_loops":             3,
+        "human_approved":        None,
+        "arm_template":          {},
+        "current_stage":         "planner",
+        "errors":                [],
     }
 
     await cl.Message(
         content=f"🚀 **Launching Azure Architecture Pipeline...**\n\n_Thread: `{thread_id}`_"
     ).send()
 
-    arm_template  = {}
-    approved      = False
-    current_loop  = 0
-    stream_input  = initial_state   # first call uses state dict; resumes use Command
+    arm_template         = {}
+    approved             = False
+    current_loop         = 0
+    architecture_history = []
+    stream_input         = initial_state   # first call uses state dict; resumes use Command
 
     try:
         # ── Main streaming loop — handles multiple interrupt types ─────────
@@ -532,6 +831,8 @@ async def on_message(message: cl.Message):
 
                     # ── Architect ────────────────────────────────────────
                     elif node_name == "architect":
+                        if updates.get("architecture_history"):
+                            architecture_history = updates["architecture_history"]
                         async with cl.Step(name=display_name, type="tool") as step:
                             step.output = _format_architecture(updates.get("architecture", {}))
 
@@ -540,6 +841,27 @@ async def on_message(message: cl.Message):
                         eval_data = updates.get("evaluation", {})
                         async with cl.Step(name=display_name, type="tool") as step:
                             step.output = _format_evaluation(eval_data)
+
+                        # Budget breach warning banner
+                        breach = eval_data.get("budget_breach")
+                        if breach:
+                            budget     = breach["budget"]
+                            actual     = breach["actual_cost"]
+                            overage    = breach["overage"]
+                            overage_pct = breach["overage_pct"]
+                            alt_cost   = updates.get("evaluation", {}).get("_alt_cost", 0)
+                            await cl.Message(
+                                content=(
+                                    f"⚠️ **Budget Warning**\n\n"
+                                    f"| | Assumed Cap | Actual Cost | Overage |\n"
+                                    f"|---|---|---|---|\n"
+                                    f"| Primary Design | ${budget:,.0f}/mo | ${actual:,.0f}/mo "
+                                    f"| **${overage:,.0f} ({overage_pct}% over)** |\n\n"
+                                    f"**Recommendation:** Request a redesign using the Cost-Optimized variant, "
+                                    f"or clarify your actual budget so the architect can right-size the SKUs."
+                                )
+                            ).send()
+
                         if not eval_data.get("passed", False):
                             issues = eval_data.get("critical_issues", [])
                             if current_loop < initial_state["max_loops"]:
@@ -547,6 +869,25 @@ async def on_message(message: cl.Message):
                                     content=(
                                         f"🔁 **Redesign Loop {current_loop + 1}/{initial_state['max_loops']}**"
                                         f" — fixing {len(issues)} critical issue(s)"
+                                    )
+                                ).send()
+
+                    # ── Security Auditor ─────────────────────────────────
+                    elif node_name == "security_auditor":
+                        audit = updates.get("security_audit", {})
+                        async with cl.Step(name=display_name, type="tool") as step:
+                            step.output = _format_security_audit(audit)
+                        if not audit.get("passed", True):
+                            critical = [
+                                f for f in audit.get("critical_findings", [])
+                                if f.get("severity") in ("Critical", "High")
+                            ]
+                            if critical and current_loop < initial_state["max_loops"]:
+                                await cl.Message(
+                                    content=(
+                                        f"🔒 **Security Issues Found — Triggering Redesign**\n\n"
+                                        f"Grade: **{audit.get('security_grade','?')}** · "
+                                        f"{len(critical)} Critical/High finding(s) must be resolved."
                                     )
                                 ).send()
 
@@ -700,6 +1041,19 @@ async def on_message(message: cl.Message):
                     "  --parameters environment=prod namingPrefix=myapp\n"
                     "```"
                 )
+            ).send()
+
+        # ── Architecture evolution history ────────────────────────────────
+        # Pull latest history from graph state in case it was updated after approval
+        try:
+            final_state = pipeline.get_state(config)
+            latest_history = final_state.values.get("architecture_history", architecture_history)
+        except Exception:
+            latest_history = architecture_history
+
+        if latest_history:
+            await cl.Message(
+                content=_format_architecture_history(latest_history)
             ).send()
 
     except Exception as exc:

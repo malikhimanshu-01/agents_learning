@@ -20,5 +20,6 @@ AZURE_DEPLOYMENT  = os.getenv("AZURE_OPENAI_DEPLOYMENT", "gpt-4o")
 AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 
 # Token limits per agent role
-TOKENS_STANDARD = 4096   # planner, evaluator
-TOKENS_LARGE    = 8192   # architect, redesigner, arm_generator
+TOKENS_STANDARD = 4096    # planner, evaluator
+TOKENS_LARGE    = 8192    # architect, redesigner
+TOKENS_ARM      = 16000   # arm_generator — ARM templates can be very large
